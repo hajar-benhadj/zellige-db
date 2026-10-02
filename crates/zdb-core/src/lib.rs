@@ -13,6 +13,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod btree;
 pub mod error;
 pub mod page;
 pub mod pager;
@@ -20,6 +21,7 @@ pub mod pager;
 #[cfg(test)]
 pub(crate) mod testing;
 
+pub use btree::{BTree, BTreeScan};
 pub use error::DbError;
 pub use page::{NIL_PAGE, PAGE_SIZE, PAYLOAD_LEN, Page, PageId, PageType};
 pub use pager::Pager;

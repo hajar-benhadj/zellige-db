@@ -43,6 +43,8 @@ pub enum PageType {
     Free = 0,
     Meta = 1,
     Data = 2,
+    BTreeLeaf = 3,
+    BTreeInterior = 4,
 }
 
 impl PageType {
@@ -51,6 +53,8 @@ impl PageType {
             0 => Ok(PageType::Free),
             1 => Ok(PageType::Meta),
             2 => Ok(PageType::Data),
+            3 => Ok(PageType::BTreeLeaf),
+            4 => Ok(PageType::BTreeInterior),
             other => Err(DbError::InvalidPageType(other)),
         }
     }

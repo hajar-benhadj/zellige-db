@@ -37,4 +37,16 @@ pub enum DbError {
 
     #[error("not a ZelligeDB file: bad magic in meta page")]
     BadMagic,
+
+    #[error("entry too large for a single node (key {key_len} B, value {val_len} B, max {max} B)")]
+    EntryTooLarge {
+        key_len: usize,
+        val_len: usize,
+        max: usize,
+    },
+
+    /// Internal: an encoder did not fit its node into one page. Splits are
+    /// decided *before* writing, so surfacing this means a split bug.
+    #[error("node encoding overflowed a page (split bug)")]
+    PageFull,
 }
