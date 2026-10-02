@@ -1,0 +1,9 @@
+/target
+
+# Database files created while playing locally
+*.zdb
+*.wal
+
+# Playground (phase 8)
+node_modules/
+web/playground/dist/

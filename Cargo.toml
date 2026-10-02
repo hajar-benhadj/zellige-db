@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/zdb-core",
+    "crates/zdb-sql",
+    "crates/zdb-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Hajar Benhadj"]
+repository = "https://github.com/hajar-benhadj/zellige-db"
+
+[workspace.dependencies]
+zdb-core = { path = "crates/zdb-core" }
+zdb-sql = { path = "crates/zdb-sql" }
+thiserror = "2"
+crc32fast = "1"
+
+# Keep debug symbols in release builds so flamegraphs from the
+# benchmark phase (phase 7) map back to real source lines.
+[profile.release]
+debug = true
