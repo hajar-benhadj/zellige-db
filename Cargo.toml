@@ -4,6 +4,7 @@ members = [
     "crates/zdb-core",
     "crates/zdb-sql",
     "crates/zdb-server",
+    "crates/zdb-wasm",
 ]
 
 [workspace.package]

@@ -84,6 +84,23 @@ impl Database {
         })
     }
 
+    /// An in-memory database: same engine, no filesystem. This is what the
+    /// WebAssembly build runs on (phase 8's playground).
+    pub fn create_memory() -> Result<Self, DbError> {
+        Ok(Database {
+            pager: Pager::create_memory()?,
+            wal: WalWriter::create_memory()?,
+            pending: Vec::new(),
+            in_txn: false,
+            txn_wal_start: 0,
+            txn_pending_start: 0,
+            txn_meta_snapshot: None,
+            path: std::path::PathBuf::from(":memory:"),
+            txns: HashMap::new(),
+            current_txn_id: 0,
+        })
+    }
+
     /// Open a database, replaying its journal if a crash left records in it.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let path = path.as_ref().to_path_buf();

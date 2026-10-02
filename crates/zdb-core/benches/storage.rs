@@ -71,7 +71,8 @@ fn main() {
         pager.sync().unwrap();
         bench("btree insert, sequential 100k", N, || {
             for i in 0..N {
-                tree.insert(&mut pager, &key(i), b"payload-0123456789").unwrap();
+                tree.insert(&mut pager, &key(i), b"payload-0123456789")
+                    .unwrap();
             }
         });
         pager.sync().unwrap();
@@ -107,7 +108,8 @@ fn main() {
             for batch in 0..10u64 {
                 db.begin().unwrap();
                 for i in batch * (N / 10)..(batch + 1) * (N / 10) {
-                    tree.insert(&mut db, &key(i), b"payload-0123456789").unwrap();
+                    tree.insert(&mut db, &key(i), b"payload-0123456789")
+                        .unwrap();
                 }
                 db.commit().unwrap();
             }

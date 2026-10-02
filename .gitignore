@@ -7,3 +7,6 @@
 # Playground (phase 8)
 node_modules/
 web/playground/dist/
+
+# Generated wasm bindings (built by CI / wasm-bindgen)
+web/playground/pkg/

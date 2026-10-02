@@ -35,8 +35,14 @@ no hand-waving:
 | 5 | Secondary indexes + MVCC snapshot isolation | ✅ |
 | 6 | Postgres wire protocol — `psql` compatibility | ✅ |
 | 7 | Benchmarks (YCSB-lite) + documented optimizations | ⬜ |
-| 8 | WASM playground — try it in the browser | ⬜ |
+| 8 | WASM playground — try it in the browser | ✅ |
 | 9 | v0.1.0 release, blog series | ⬜ |
+
+## Try it in your browser
+
+**[▶ Open the SQL playground](https://hajar-benhadj.github.io/zellige-db/)** —
+the full engine compiled to WebAssembly: create tables, insert rows, run
+transactions. No server, no network; your SQL never leaves the tab.
 
 ## Numbers (measured, not promised)
 

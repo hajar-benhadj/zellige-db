@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ZelligeDB — SQL playground</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: #12141a; color: #e8e6e3;
+      font-family: "Segoe UI", system-ui, sans-serif; display: flex;
+      flex-direction: column; align-items: center; padding: 2rem 1rem;
+    }
+    header { text-align: center; margin-bottom: 1.5rem; }
+    h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.5px; }
+    h1 span { color: #e6a23c; }
+    p.sub { margin: 0.4rem 0 0; color: #9a958e; font-size: 0.95rem; }
+    main { width: min(880px, 100%); display: flex; flex-direction: column; gap: 1rem; }
+    textarea {
+      width: 100%; min-height: 130px; resize: vertical; background: #1a1d25;
+      color: #e8e6e3; border: 1px solid #2d313c; border-radius: 8px;
+      padding: 0.9rem; font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.95rem; line-height: 1.5;
+    }
+    textarea:focus { outline: 2px solid #e6a23c66; border-color: #e6a23c88; }
+    .row { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+    button {
+      background: #e6a23c; border: 0; color: #12141a; font-weight: 600;
+      padding: 0.55rem 1.3rem; border-radius: 7px; cursor: pointer; font-size: 0.95rem;
+    }
+    button:hover { background: #f0b45a; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    select {
+      background: #1a1d25; color: #e8e6e3; border: 1px solid #2d313c;
+      border-radius: 7px; padding: 0.5rem 0.7rem; font-size: 0.9rem;
+    }
+    pre#out {
+      background: #1a1d25; border: 1px solid #2d313c; border-radius: 8px;
+      padding: 1rem; min-height: 200px; white-space: pre-wrap;
+      font-family: ui-monospace, Consolas, monospace; font-size: 0.88rem;
+      line-height: 1.45; color: #cfe3cf;
+    }
+    footer { margin-top: 1.6rem; color: #6f6a64; font-size: 0.85rem; text-align: center; }
+    footer a { color: #9a958e; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Zellige<span>DB</span> — SQL playground</h1>
+    <p class="sub">A database engine compiled to WebAssembly: pages, B+Tree, WAL, SQL — running entirely in your browser tab.</p>
+  </header>
+  <main>
+    <div class="row">
+      <select id="examples">
+        <option value="">— try an example —</option>
+        <option value="create">CREATE TABLE + INSERTs</option>
+        <option value="select">SELECT with WHERE + ORDER BY</option>
+        <option value="index">Secondary index (CREATE INDEX)</option>
+        <option value="txn">Transactions (BEGIN / ROLLBACK)</option>
+      </select>
+      <button id="run" disabled>Run ▶</button>
+      <span id="status" style="color:#9a958e;font-size:0.9rem">loading engine…</span>
+    </div>
+    <textarea id="sql" spellcheck="false" placeholder="-- SQL goes here; end statements with ;"></textarea>
+    <pre id="out">Engine not loaded yet.</pre>
+  </main>
+  <footer>
+    Built with Rust → WebAssembly. No server, no network — your SQL never leaves the tab.
+    <a href="https://github.com/hajar-benhadj/zellige-db">source & docs</a>
+  </footer>
+  <script type="module">
+    import init, { ZelligeDb, version } from "./pkg/zdb_wasm.js";
+
+    const examples = {
+      create: `CREATE TABLE users (id INTEGER, name TEXT, city TEXT);
+INSERT INTO users VALUES (1, 'hajar', 'casablanca'), (2, 'amine', 'rabat'), (3, 'sara', 'fes');
+SELECT * FROM users;`,
+      select: `CREATE TABLE scores (id INTEGER, player TEXT, points INTEGER);
+INSERT INTO scores VALUES (1, 'adil', 90), (2, 'boutaina', 75), (3, 'chalhoub', 88), (4, 'doha', 92);
+SELECT player, points FROM scores WHERE points > 80 ORDER BY points DESC;`,
+      index: `CREATE TABLE events (id INTEGER, kind TEXT, score INTEGER);
+INSERT INTO events VALUES (1, 'run', 100), (2, 'jump', 250), (3, 'run', 180), (4, 'swim', 300);
+CREATE INDEX by_kind ON events (kind);
+SELECT * FROM events WHERE kind = 'run';`,
+      txn: `CREATE TABLE wallet (id INTEGER, balance INTEGER);
+INSERT INTO wallet VALUES (1, 100);
+BEGIN;
+UPDATE wallet SET balance = balance + 500 WHERE id = 1;
+SELECT * FROM wallet;
+ROLLBACK;
+SELECT * FROM wallet;`
+    };
+
+    const runBtn = document.getElementById("run");
+    const status = document.getElementById("status");
+    const out = document.getElementById("out");
+    const sqlBox = document.getElementById("sql");
+    const sel = document.getElementById("examples");
+    let db = null;
+
+    try {
+      await init();
+      db = new ZelligeDb();
+      out.textContent = version() + " loaded.\n\nPick an example or write your own SQL, then press Run.";
+      status.textContent = "engine ready ✓";
+      runBtn.disabled = false;
+    } catch (e) {
+      status.textContent = "failed to load the engine";
+      out.textContent = String(e);
+    }
+
+    runBtn.onclick = () => {
+      if (!db) return;
+      runBtn.disabled = true;
+      try {
+        out.textContent = db.execute(sqlBox.value) || "(no output — was the batch empty?)";
+      } finally {
+        runBtn.disabled = false;
+      }
+    };
+
+    sel.onchange = () => {
+      if (sel.value) sqlBox.value = examples[sel.value] + "\n";
+    };
+
+    sqlBox.addEventListener("keydown", (ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") runBtn.click();
+    });
+  </script>
+</body>
+</html>

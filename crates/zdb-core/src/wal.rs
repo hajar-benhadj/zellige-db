@@ -21,12 +21,12 @@
 //! check and everything from that point on is discarded, so a partially
 //! flushed frame can never be half-applied.
 
-use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::error::DbError;
 use crate::page::{PAGE_SIZE, PageId};
+use crate::pagefile::{MemoryFile, OsFile, PageFile};
 
 const FRAME_HEADER: usize = 20;
 /// `page_id` sentinel marking a commit record.
@@ -41,21 +41,27 @@ pub(crate) struct Frame {
 
 pub(crate) struct WalWriter {
     path: PathBuf,
-    file: BufWriter<File>,
+    file: Box<dyn PageFile>,
     next_lsn: u64,
     bytes_written: u64,
 }
 
 impl WalWriter {
     pub fn create(path: impl AsRef<Path>) -> Result<Self, DbError> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(path.as_ref())?;
+        let file: Box<dyn PageFile> = Box::new(OsFile::create(path.as_ref())?);
         Ok(WalWriter {
             path: path.as_ref().to_path_buf(),
-            file: BufWriter::new(file),
+            file,
+            next_lsn: 1,
+            bytes_written: 0,
+        })
+    }
+
+    /// A journal over plain memory (WebAssembly backend).
+    pub fn create_memory() -> Result<Self, DbError> {
+        Ok(WalWriter {
+            path: PathBuf::from(":memory:.wal"),
+            file: Box::new(MemoryFile::new()),
             next_lsn: 1,
             bytes_written: 0,
         })
@@ -67,19 +73,16 @@ impl WalWriter {
     /// not part of the result.
     pub fn open(path: impl AsRef<Path>) -> Result<(Self, Vec<Frame>), DbError> {
         let mut raw = Vec::new();
-        File::open(path.as_ref())?.read_to_end(&mut raw)?;
+        std::fs::File::open(path.as_ref())?.read_to_end(&mut raw)?;
         let frames = parse_frames(&raw);
 
         let next_lsn = frames.last().map_or(1, |f| f.lsn + 1);
         let bytes_written = raw.len() as u64;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path.as_ref())?;
+        let file: Box<dyn PageFile> = Box::new(OsFile::open(path.as_ref())?);
         Ok((
             WalWriter {
                 path: path.as_ref().to_path_buf(),
-                file: BufWriter::new(file),
+                file,
                 next_lsn,
                 bytes_written,
             },
@@ -103,8 +106,10 @@ impl WalWriter {
     ) -> Result<(), DbError> {
         debug_assert_eq!(lsn, self.next_lsn, "LSNs must be assigned sequentially");
         let header = frame_header(lsn, page_id, Some(image));
-        self.file.write_all(&header)?;
-        self.file.write_all(image)?;
+        let mut frame = header.to_vec();
+        frame.extend_from_slice(image);
+        let offset = self.bytes_written;
+        self.file.write_all_at(&frame, offset)?;
         self.next_lsn += 1;
         self.bytes_written += FRAME_HEADER as u64 + PAGE_SIZE as u64;
         Ok(())
@@ -113,7 +118,8 @@ impl WalWriter {
     pub fn append_commit(&mut self) -> Result<(), DbError> {
         let lsn = self.next_lsn;
         let header = frame_header(lsn, COMMIT_PAGE_ID, None);
-        self.file.write_all(&header)?;
+        let offset = self.bytes_written;
+        self.file.write_all_at(&header, offset)?;
         self.next_lsn += 1;
         self.bytes_written += FRAME_HEADER as u64;
         Ok(())
@@ -123,16 +129,13 @@ impl WalWriter {
     /// returns, the transaction is committed as far as the world is
     /// concerned — power loss included.
     pub fn flush_and_sync(&mut self) -> Result<(), DbError> {
-        self.file.flush()?;
-        self.file.get_ref().sync_all()?;
+        self.file.sync()?;
         Ok(())
     }
 
     /// Rollback support: drop everything appended since `offset`.
     pub fn truncate_to(&mut self, offset: u64) -> Result<(), DbError> {
-        self.file.flush()?;
-        self.file.get_ref().set_len(offset)?;
-        self.file.seek(SeekFrom::Start(offset))?;
+        self.file.set_len(offset)?;
         // LSNs of the discarded frames are never reused within this file
         // generation; the counter keeps climbing.
         self.bytes_written = offset;
@@ -141,9 +144,7 @@ impl WalWriter {
 
     /// Checkpoint support: empty the log and restart LSN numbering.
     pub fn reset(&mut self) -> Result<(), DbError> {
-        self.file.flush()?;
-        self.file.get_ref().set_len(0)?;
-        self.file.seek(SeekFrom::Start(0))?;
+        self.file.set_len(0)?;
         self.next_lsn = 1;
         self.bytes_written = 0;
         Ok(())

@@ -60,6 +60,15 @@ impl SqlEngine {
         })
     }
 
+    /// An in-memory SQL session (WebAssembly playground).
+    pub fn create_memory() -> Result<Self, DbError> {
+        Ok(SqlEngine {
+            db: Arc::new(Mutex::new(Database::create_memory()?)),
+            path: PathBuf::from(":memory:"),
+            txn: None,
+        })
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let path = path.as_ref().to_path_buf();
         Ok(SqlEngine {

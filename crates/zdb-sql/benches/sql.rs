@@ -113,7 +113,8 @@ fn main() {
     });
 
     // 3b. The same query after CREATE INDEX: the planner picks the index.
-    e.execute("CREATE INDEX by_score ON events (score)").unwrap();
+    e.execute("CREATE INDEX by_score ON events (score)")
+        .unwrap();
     bench("sql point query WITH index (planner)", Q, || {
         for _ in 0..Q {
             let out = e.execute(query).unwrap();

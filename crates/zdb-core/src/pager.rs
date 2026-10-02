@@ -9,13 +9,14 @@
 //! stable storage only at [`Pager::sync`]. Phase 3's WAL replaces this with
 //! commit-time fsync semantics.
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::DbError;
 use crate::page::{NIL_PAGE, PAGE_SIZE, Page, PageId, PageType};
+use crate::pagefile::{MemoryFile, OsFile, PageFile};
 
 const MAGIC: [u8; 4] = *b"ZDB1";
 const META_PAGE_ID: PageId = 0;
@@ -83,9 +84,8 @@ impl MetaPage {
 }
 
 /// Owns the database file and hands out checksum-verified pages.
-#[derive(Debug)]
 pub struct Pager {
-    file: File,
+    file: Box<dyn PageFile>,
     path: PathBuf,
     meta: MetaPage,
     /// Per-process page cache (ADR-0008): turns a seek+read syscall pair
@@ -97,6 +97,16 @@ pub struct Pager {
 /// Cache ceiling in pages (32 MiB of 4 KiB pages).
 const CACHE_MAX_PAGES: usize = 8192;
 
+impl std::fmt::Debug for Pager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Pager")
+            .field("path", &self.path)
+            .field("meta", &self.meta)
+            .field("cached_pages", &self.cache.len())
+            .finish()
+    }
+}
+
 impl Pager {
     /// Create a fresh database file. Fails if the path already exists —
     /// overwriting a database by accident is not a recoverable mistake.
@@ -105,11 +115,7 @@ impl Pager {
         if path.exists() {
             return Err(DbError::AlreadyExists(path.display().to_string()));
         }
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(path)?;
+        let file: Box<dyn PageFile> = Box::new(OsFile::create(path)?);
         let mut pager = Pager {
             file,
             path: path.to_path_buf(),
@@ -127,6 +133,22 @@ impl Pager {
         Ok(pager)
     }
 
+    /// A pager over plain memory: the WebAssembly backend (phase 8).
+    pub fn create_memory() -> Result<Self, DbError> {
+        Ok(Pager {
+            file: Box::new(MemoryFile::new()),
+            path: PathBuf::from(":memory:"),
+            meta: MetaPage {
+                page_count: 1,
+                free_head: NIL_PAGE,
+                free_count: 0,
+                catalog_root: NIL_PAGE,
+                next_txn_id: 1,
+            },
+            cache: HashMap::new(),
+        })
+    }
+
     /// Open an existing database, verifying its meta page.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let mut pager = Self::open_lenient(path)?;
@@ -142,10 +164,7 @@ impl Pager {
     /// kept when the header is torn. This exists *only* for crash recovery,
     /// which repairs page 0 from the journal before anything reads it.
     pub fn open_lenient(path: impl AsRef<Path>) -> Result<Self, DbError> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path.as_ref())?;
+        let file: Box<dyn PageFile> = Box::new(OsFile::open(path.as_ref())?);
         let mut pager = Pager {
             file,
             path: path.as_ref().to_path_buf(),
@@ -180,8 +199,7 @@ impl Pager {
             return Ok(page.clone());
         }
         let mut bytes = [0u8; PAGE_SIZE];
-        self.file.seek(SeekFrom::Start(Self::offset(page_id)))?;
-        self.file.read_exact(&mut bytes)?;
+        self.file.read_exact_at(&mut bytes, Self::offset(page_id))?;
         let page = Page::decode(bytes)?;
         if self.cache.len() >= CACHE_MAX_PAGES {
             // Arbitrary eviction is fine: the cache is a pure accelerator.
@@ -203,8 +221,8 @@ impl Pager {
             return Err(DbError::PageOutOfBounds(page_id));
         }
         page.seal();
-        self.file.seek(SeekFrom::Start(Self::offset(page_id)))?;
-        self.file.write_all(page.bytes())?;
+        let offset = Self::offset(page_id);
+        self.file.write_all_at(page.bytes(), offset)?;
         self.cache.insert(page_id, page.clone());
         Ok(())
     }
@@ -249,7 +267,7 @@ impl Pager {
     /// fsync everything. Before this returns, nothing is guaranteed to have
     /// reached the platter (or the SSD's FTL).
     pub fn sync(&mut self) -> Result<(), DbError> {
-        self.file.sync_all()?;
+        self.file.sync()?;
         Ok(())
     }
 
@@ -364,9 +382,8 @@ impl Pager {
     /// in the same replay batch but is not yet reflected in memory.
     pub fn write_page_raw(&mut self, page: &mut Page) -> Result<(), DbError> {
         page.seal();
-        self.file
-            .seek(SeekFrom::Start(Self::offset(page.page_id())))?;
-        self.file.write_all(page.bytes())?;
+        let offset = Self::offset(page.page_id());
+        self.file.write_all_at(page.bytes(), offset)?;
         // Raw writes happen during recovery, before anything trusts the
         // cache — skipping this update is exactly how a stale cache turns
         // a repaired file back into a broken one.
