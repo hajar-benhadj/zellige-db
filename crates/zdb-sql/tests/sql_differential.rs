@@ -117,7 +117,18 @@ fn random_select(rng: &mut Lcg) -> String {
 
 fn zdb_rows(engine: &mut SqlEngine, sql: &str) -> Vec<Vec<Value>> {
     match engine.execute(sql).unwrap() {
-        zdb_sql::Output::Query { rows, .. } => rows,
+        zdb_sql::Output::Query { rows, .. } => rows
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|v| match v {
+                        // Normalize: SQLite stores booleans as 0/1 integers.
+                        Value::Bool(b) => Value::Int(b as i64),
+                        other => other,
+                    })
+                    .collect()
+            })
+            .collect(),
         other => panic!("expected query for {sql}: {other:?}"),
     }
 }
