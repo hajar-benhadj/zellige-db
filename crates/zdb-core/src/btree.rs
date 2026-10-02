@@ -21,8 +21,8 @@
 //! than that triggers borrow-from-sibling or merge on delete. See ADR-0003.
 
 use crate::error::DbError;
+use crate::io::PageIo;
 use crate::page::{NIL_PAGE, PAYLOAD_LEN, Page, PageId, PageType};
-use crate::pager::Pager;
 
 const KIND_INTERIOR: usize = 0;
 const KIND_LEAF: usize = 1;
@@ -208,7 +208,7 @@ impl Interior {
 // Node I/O through the pager
 // ---------------------------------------------------------------------------
 
-fn read_leaf(pager: &mut Pager, page_id: PageId) -> Result<Leaf, DbError> {
+fn read_leaf(pager: &mut dyn PageIo, page_id: PageId) -> Result<Leaf, DbError> {
     let page = pager.read_page(page_id)?;
     if page.page_type()? != PageType::BTreeLeaf {
         return Err(DbError::Corrupt("page is not a B+Tree leaf"));
@@ -216,7 +216,7 @@ fn read_leaf(pager: &mut Pager, page_id: PageId) -> Result<Leaf, DbError> {
     Leaf::decode(page.payload())
 }
 
-fn read_interior(pager: &mut Pager, page_id: PageId) -> Result<Interior, DbError> {
+fn read_interior(pager: &mut dyn PageIo, page_id: PageId) -> Result<Interior, DbError> {
     let page = pager.read_page(page_id)?;
     if page.page_type()? != PageType::BTreeInterior {
         return Err(DbError::Corrupt("page is not a B+Tree interior"));
@@ -224,13 +224,13 @@ fn read_interior(pager: &mut Pager, page_id: PageId) -> Result<Interior, DbError
     Interior::decode(page.payload())
 }
 
-fn write_leaf(pager: &mut Pager, page_id: PageId, leaf: &Leaf) -> Result<(), DbError> {
+fn write_leaf(pager: &mut dyn PageIo, page_id: PageId, leaf: &Leaf) -> Result<(), DbError> {
     let mut page = Page::zeroed(page_id, PageType::BTreeLeaf);
     leaf.encode(page.payload_mut())?;
     pager.write_page(&mut page)
 }
 
-fn write_interior(pager: &mut Pager, page_id: PageId, node: &Interior) -> Result<(), DbError> {
+fn write_interior(pager: &mut dyn PageIo, page_id: PageId, node: &Interior) -> Result<(), DbError> {
     let mut page = Page::zeroed(page_id, PageType::BTreeInterior);
     node.encode(page.payload_mut())?;
     pager.write_page(&mut page)
@@ -251,7 +251,7 @@ impl BTree {
         BTree { root: None }
     }
 
-    pub fn get(&self, pager: &mut Pager, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {
+    pub fn get(&self, pager: &mut dyn PageIo, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {
         let mut page_id = match self.root {
             Some(root) => root,
             None => return Ok(None),
@@ -284,7 +284,12 @@ impl BTree {
     }
 
     /// Insert or overwrite a key.
-    pub fn insert(&mut self, pager: &mut Pager, key: &[u8], value: &[u8]) -> Result<(), DbError> {
+    pub fn insert(
+        &mut self,
+        pager: &mut dyn PageIo,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<(), DbError> {
         if key.is_empty() {
             return Err(DbError::Corrupt("empty key"));
         }
@@ -325,7 +330,7 @@ impl BTree {
     }
 
     /// Delete a key. Returns whether it existed.
-    pub fn delete(&mut self, pager: &mut Pager, key: &[u8]) -> Result<bool, DbError> {
+    pub fn delete(&mut self, pager: &mut dyn PageIo, key: &[u8]) -> Result<bool, DbError> {
         let root = match self.root {
             Some(root) => root,
             None => return Ok(false),
@@ -347,7 +352,7 @@ impl BTree {
     }
 
     /// Full ascending scan, driven by the leaf chain.
-    pub fn scan<'a>(&self, pager: &'a mut Pager) -> Result<BTreeScan<'a>, DbError> {
+    pub fn scan<'a>(&self, pager: &'a mut dyn PageIo) -> Result<BTreeScan<'a>, DbError> {
         let mut leaf_id = NIL_PAGE;
         if let Some(root) = self.root {
             let mut page_id = root;
@@ -372,7 +377,7 @@ impl BTree {
 
     /// Multi-line human-readable dump of the whole tree — the text twin of
     /// the future browser visualizer, and the `zdb demo-tree` output.
-    pub fn debug_dump(&self, pager: &mut Pager) -> Result<Vec<String>, DbError> {
+    pub fn debug_dump(&self, pager: &mut dyn PageIo) -> Result<Vec<String>, DbError> {
         let mut lines = Vec::new();
         if let Some(root) = self.root {
             dump(pager, root, 0, &mut lines)?;
@@ -385,7 +390,7 @@ impl BTree {
     /// Walk the whole tree validating every structural invariant: page
     /// types, ordering, uniqueness, occupancy, and that the leaf chain
     /// replays exactly the in-order key sequence.
-    pub fn check_integrity(&self, pager: &mut Pager) -> Result<(), DbError> {
+    pub fn check_integrity(&self, pager: &mut dyn PageIo) -> Result<(), DbError> {
         let Some(root) = self.root else {
             return Ok(());
         };
@@ -416,7 +421,7 @@ impl BTree {
 }
 
 fn walk(
-    pager: &mut Pager,
+    pager: &mut dyn PageIo,
     page_id: PageId,
     is_root: bool,
     keys: &mut Vec<Vec<u8>>,
@@ -455,7 +460,7 @@ fn walk(
 }
 
 fn dump(
-    pager: &mut Pager,
+    pager: &mut dyn PageIo,
     page_id: PageId,
     depth: usize,
     lines: &mut Vec<String>,
@@ -505,7 +510,7 @@ fn dump(
 }
 
 fn insert_rec(
-    pager: &mut Pager,
+    pager: &mut dyn PageIo,
     page_id: PageId,
     key: &[u8],
     value: &[u8],
@@ -592,7 +597,11 @@ fn insert_rec(
 }
 
 /// Returns `(deleted, child_underflowed)`.
-fn delete_rec(pager: &mut Pager, page_id: PageId, key: &[u8]) -> Result<(bool, bool), DbError> {
+fn delete_rec(
+    pager: &mut dyn PageIo,
+    page_id: PageId,
+    key: &[u8],
+) -> Result<(bool, bool), DbError> {
     let page = pager.read_page(page_id)?;
     match page.page_type()? {
         PageType::BTreeLeaf => {
@@ -657,7 +666,7 @@ fn delete_rec(pager: &mut Pager, page_id: PageId, key: &[u8]) -> Result<(bool, b
     }
 }
 
-fn sibling_has_spare(pager: &mut Pager, page_id: PageId) -> Result<bool, DbError> {
+fn sibling_has_spare(pager: &mut dyn PageIo, page_id: PageId) -> Result<bool, DbError> {
     let page = pager.read_page(page_id)?;
     let count = match page.page_type()? {
         PageType::BTreeLeaf => Leaf::decode(page.payload())?.entries.len(),
@@ -668,7 +677,7 @@ fn sibling_has_spare(pager: &mut Pager, page_id: PageId) -> Result<bool, DbError
 }
 
 fn borrow_from_left(
-    pager: &mut Pager,
+    pager: &mut dyn PageIo,
     parent: &mut Interior,
     child_idx: usize,
     left_id: PageId,
@@ -698,7 +707,7 @@ fn borrow_from_left(
 }
 
 fn borrow_from_right(
-    pager: &mut Pager,
+    pager: &mut dyn PageIo,
     parent: &mut Interior,
     child_idx: usize,
     right_id: PageId,
@@ -728,7 +737,7 @@ fn borrow_from_right(
 }
 
 fn merge(
-    pager: &mut Pager,
+    pager: &mut dyn PageIo,
     parent: &mut Interior,
     sep_pos: usize,
     into_id: PageId,
@@ -764,7 +773,7 @@ fn merge(
 /// Ascending iterator over every `(key, value)` in the tree, following the
 /// leaf chain page by page.
 pub struct BTreeScan<'a> {
-    pager: &'a mut Pager,
+    pager: &'a mut dyn PageIo,
     leaf_id: PageId,
     idx: usize,
     done: bool,
@@ -799,6 +808,7 @@ impl<'a> Iterator for BTreeScan<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pager::Pager;
     use crate::testing::TempDir;
 
     fn opened(tag: &str) -> (TempDir, Pager) {
@@ -812,7 +822,7 @@ mod tests {
         let (_dir, mut pager) = opened("basic");
         let mut tree = BTree::empty();
         assert_eq!(tree.get(&mut pager, b"k").unwrap(), None);
-        assert_eq!(tree.delete(&mut pager, b"k").unwrap(), false);
+        assert!(!tree.delete(&mut pager, b"k").unwrap());
 
         tree.insert(&mut pager, b"k1", b"v1").unwrap();
         tree.insert(&mut pager, b"k3", b"v3").unwrap();

@@ -29,12 +29,14 @@ const META_PAGE_ID: PageId = 0;
 /// 8               4     page count (file length in pages)
 /// 12              4     free list head (NIL_PAGE if empty)
 /// 16              4     free page count
+/// 20              4     catalog B+Tree root (NIL_PAGE if no trees yet)
 /// ```
 #[derive(Debug, Clone, Copy)]
 struct MetaPage {
     page_count: u32,
     free_head: PageId,
     free_count: u32,
+    catalog_root: PageId,
 }
 
 impl MetaPage {
@@ -46,6 +48,7 @@ impl MetaPage {
         p[8..12].copy_from_slice(&self.page_count.to_le_bytes());
         p[12..16].copy_from_slice(&self.free_head.to_le_bytes());
         p[16..20].copy_from_slice(&self.free_count.to_le_bytes());
+        p[20..24].copy_from_slice(&self.catalog_root.to_le_bytes());
     }
 
     fn decode(page: &Page) -> Result<Self, DbError> {
@@ -69,6 +72,7 @@ impl MetaPage {
             page_count,
             free_head: u32_at(12),
             free_count: u32_at(16),
+            catalog_root: u32_at(20),
         })
     }
 }
@@ -101,6 +105,7 @@ impl Pager {
                 page_count: 1,
                 free_head: NIL_PAGE,
                 free_count: 0,
+                catalog_root: NIL_PAGE,
             },
         };
         pager.persist_meta()?;
@@ -110,6 +115,19 @@ impl Pager {
 
     /// Open an existing database, verifying its meta page.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
+        let mut pager = Self::open_lenient(path)?;
+        let meta_page = pager.read_page(META_PAGE_ID)?;
+        if meta_page.page_type()? != PageType::Meta {
+            return Err(DbError::Corrupt("page 0 is not a meta page"));
+        }
+        pager.meta = MetaPage::decode(&meta_page)?;
+        Ok(pager)
+    }
+
+    /// Open the file handle without trusting the meta page: defaults are
+    /// kept when the header is torn. This exists *only* for crash recovery,
+    /// which repairs page 0 from the journal before anything reads it.
+    pub fn open_lenient(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -121,13 +139,14 @@ impl Pager {
                 page_count: 1,
                 free_head: NIL_PAGE,
                 free_count: 0,
+                catalog_root: NIL_PAGE,
             },
         };
-        let meta_page = pager.read_page(META_PAGE_ID)?;
-        if meta_page.page_type()? != PageType::Meta {
-            return Err(DbError::Corrupt("page 0 is not a meta page"));
+        if let Ok(meta_page) = pager.read_page(META_PAGE_ID)
+            && let Ok(meta) = MetaPage::decode(&meta_page)
+        {
+            pager.meta = meta;
         }
-        pager.meta = MetaPage::decode(&meta_page)?;
         Ok(pager)
     }
 
@@ -217,6 +236,99 @@ impl Pager {
         &self.path
     }
 
+    // -- primitives for the WAL layer (see database.rs) ----------------------
+    //
+    // These mutate the *in-memory* meta state and hand back page images, but
+    // never persist anything: durability decisions belong to the WAL, and a
+    // meta page that reaches the data file before its journal record would
+    // survive an aborted transaction's allocations (a leak, or worse, an
+    // early `Free` marking — data loss).
+
+    /// Copy of the meta state, for transaction rollback.
+    pub fn meta_snapshot(&self) -> MetaSnapshot {
+        MetaSnapshot {
+            page_count: self.meta.page_count,
+            free_head: self.meta.free_head,
+            free_count: self.meta.free_count,
+            catalog_root: self.meta.catalog_root,
+        }
+    }
+
+    pub fn restore_meta(&mut self, snapshot: MetaSnapshot) {
+        self.meta = MetaPage {
+            page_count: snapshot.page_count,
+            free_head: snapshot.free_head,
+            free_count: snapshot.free_count,
+            catalog_root: snapshot.catalog_root,
+        };
+    }
+
+    /// Point the catalog at a new root. In-memory only: the WAL layer
+    /// journals the meta image itself (see `Database::save_tree`).
+    pub fn set_catalog_root(&mut self, root: PageId) {
+        self.meta.catalog_root = root;
+    }
+
+    pub fn catalog_root(&self) -> PageId {
+        self.meta.catalog_root
+    }
+
+    /// Sealed meta page image reflecting the current in-memory state.
+    pub fn meta_image(&self) -> Page {
+        let mut page = Page::zeroed(META_PAGE_ID, PageType::Meta);
+        self.meta.encode(&mut page);
+        page
+    }
+
+    /// Re-derive in-memory meta from the (possibly just-recovered) file.
+    pub fn reload_meta(&mut self) -> Result<(), DbError> {
+        let page = self.read_page(META_PAGE_ID)?;
+        if page.page_type()? != PageType::Meta {
+            return Err(DbError::Corrupt("page 0 is not a meta page"));
+        }
+        self.meta = MetaPage::decode(&page)?;
+        Ok(())
+    }
+
+    /// Allocate like [`Pager::alloc_page`] but persist *nothing*: the caller
+    /// (WAL layer) journals the meta image itself.
+    pub fn alloc_slot(&mut self, page_type: PageType) -> Result<Page, DbError> {
+        debug_assert_ne!(page_type, PageType::Meta, "page 0 is reserved for meta");
+        let page_id = if self.meta.free_head != NIL_PAGE {
+            self.pop_free_head()?
+        } else {
+            let page_id = self.meta.page_count;
+            self.meta.page_count += 1;
+            page_id
+        };
+        Ok(Page::zeroed(page_id, page_type))
+    }
+
+    /// Free like [`Pager::free_page`] but persist *nothing*; returns the
+    /// `Free` page image for the caller to journal.
+    pub fn free_slot(&mut self, page_id: PageId) -> Result<Page, DbError> {
+        if page_id == META_PAGE_ID || page_id >= self.meta.page_count {
+            return Err(DbError::PageOutOfBounds(page_id));
+        }
+        let mut page = Page::zeroed(page_id, PageType::Free);
+        page.set_next_free(self.meta.free_head);
+        self.meta.free_head = page_id;
+        self.meta.free_count += 1;
+        Ok(page)
+    }
+
+    /// Unchecked write used only by recovery, which replays meta images
+    /// (raising `page_count`) and data images in journal order — the normal
+    /// bounds check would reject data pages whose meta image comes earlier
+    /// in the same replay batch but is not yet reflected in memory.
+    pub fn write_page_raw(&mut self, page: &mut Page) -> Result<(), DbError> {
+        page.seal();
+        self.file
+            .seek(SeekFrom::Start(Self::offset(page.page_id())))?;
+        self.file.write_all(page.bytes())?;
+        Ok(())
+    }
+
     /// Pop the head of the free list (LIFO reuse keeps freed pages warm).
     fn pop_free_head(&mut self) -> Result<PageId, DbError> {
         if self.meta.free_count == 0 {
@@ -237,6 +349,15 @@ impl Pager {
         self.meta.encode(&mut page);
         self.write_page(&mut page)
     }
+}
+
+/// Rollback-able copy of the meta bookkeeping (see [`Pager::meta_snapshot`]).
+#[derive(Debug, Clone, Copy)]
+pub struct MetaSnapshot {
+    pub page_count: u32,
+    pub free_head: PageId,
+    pub free_count: u32,
+    pub catalog_root: PageId,
 }
 
 #[cfg(test)]

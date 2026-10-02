@@ -30,7 +30,7 @@ no hand-waving:
 | 0 | Workspace, CI, docs | ✅ |
 | 1 | Pager: 4 KiB pages, CRC32 checksums, free list | ✅ |
 | 2 | B+Tree with property-based tests | ✅ |
-| 3 | WAL + crash recovery + crash-test harness | ⬜ |
+| 3 | WAL + crash recovery + crash-test harness | ✅ |
 | 4 | SQL: parser, executor, REPL + differential testing vs SQLite | ⬜ |
 | 5 | Secondary indexes + MVCC snapshot isolation | ⬜ |
 | 6 | Postgres wire protocol — `psql` compatibility | ⬜ |

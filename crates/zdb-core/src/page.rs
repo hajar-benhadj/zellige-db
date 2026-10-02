@@ -138,6 +138,18 @@ impl Page {
         self.set_u32_at(8, next);
     }
 
+    /// Informational WAL log-sequence number of the last record that wrote
+    /// this page (bytes 12..16, the slot reserved in ADR-0002). Recovery
+    /// does not depend on it — committed frames replay in LSN order — but
+    /// it makes hex dumps and debugging far easier.
+    pub fn lsn(&self) -> u32 {
+        self.u32_at(12)
+    }
+
+    pub fn set_lsn(&mut self, lsn: u32) {
+        self.set_u32_at(12, lsn);
+    }
+
     pub fn payload(&self) -> &[u8] {
         &self.bytes[HEADER_LEN..CHECKSUM_OFF]
     }

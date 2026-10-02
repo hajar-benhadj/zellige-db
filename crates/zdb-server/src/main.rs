@@ -1,12 +1,12 @@
 //! `zdb` — the ZelligeDB command line entry point.
 //!
 //! Subcommands grow with the phases:
-//! - `demo-tree [file] [n]` — phase 2: build a B+Tree of n entries and dump it
+//! - `demo-tree [file] [n]` — build a B+Tree of n entries and dump it
 //! - the SQL REPL arrives in phase 4; `zdb serve` (pg wire) in phase 6
 
 use std::process::ExitCode;
 
-use zdb_core::{BTree, Pager};
+use zdb_core::{BTree, Database, DbError};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -30,35 +30,31 @@ fn demo_tree(args: &[String]) -> ExitCode {
     let entries: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(40);
 
     let _ = std::fs::remove_file(&path);
-    let mut pager = match Pager::create(&path) {
-        Ok(pager) => pager,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut tree = BTree::empty();
-    for i in 1..=entries {
-        let key = format!("user-{i:04}");
-        let value = format!("row-{i}");
-        if let Err(e) = tree.insert(&mut pager, key.as_bytes(), value.as_bytes()) {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    }
-    pager.sync().unwrap();
+    let _ = std::fs::remove_file(format!("{path}.wal"));
 
-    println!("ZelligeDB: inserted {entries} entries into {path}\n");
-    match tree.debug_dump(&mut pager) {
-        Ok(lines) => {
-            for line in lines {
-                println!("{line}");
-            }
+    let run = || -> Result<(), DbError> {
+        let mut db = Database::create(&path)?;
+        db.begin()?;
+        let mut tree = BTree::empty();
+        for i in 1..=entries {
+            let key = format!("user-{i:04}");
+            let value = format!("row-{i}");
+            tree.insert(&mut db, key.as_bytes(), value.as_bytes())?;
         }
+        db.commit()?;
+        db.checkpoint()?;
+        println!("ZelligeDB: inserted {entries} entries into {path}\n");
+        for line in tree.debug_dump(&mut db)? {
+            println!("{line}");
+        }
+        Ok(())
+    };
+
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
-            return ExitCode::FAILURE;
+            ExitCode::FAILURE
         }
     }
-    ExitCode::SUCCESS
 }
