@@ -16,6 +16,7 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         None | Some("repl") => repl(args.get(1).map(String::as_str)),
         Some("demo-tree") => demo_tree(&args[1..]),
+        Some("serve") => serve_cmd(&args[1..]),
         _ => usage(),
     }
 }
@@ -26,6 +27,7 @@ fn usage() -> ExitCode {
     eprintln!("usage:");
     eprintln!("  zdb [file]                      SQL REPL (default file: zellige.zdb)");
     eprintln!("  zdb demo-tree [file] [entries]  B+Tree structure dump");
+    eprintln!("  zdb serve [file] [--port N]     Postgres wire server (psql-compatible)");
     ExitCode::from(2)
 }
 
@@ -123,6 +125,48 @@ fn demo_tree(args: &[String]) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn serve_cmd(args: &[String]) -> ExitCode {
+    let mut file = "zellige.zdb".to_string();
+    let mut port: u16 = 5432;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--port" if i + 1 < args.len() => {
+                match args[i + 1].parse() {
+                    Ok(p) => port = p,
+                    Err(_) => {
+                        eprintln!("error: --port expects a number");
+                        return ExitCode::FAILURE;
+                    }
+                }
+                i += 2;
+            }
+            other => {
+                file = other.to_string();
+                i += 1;
+            }
+        }
+    }
+    let engine = if std::path::Path::new(&file).exists() {
+        SqlEngine::open(&file)
+    } else {
+        SqlEngine::create(&file)
+    };
+    match engine {
+        Ok(engine) => match zdb_server::serve::serve(engine, port) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(e) => {
+            eprintln!("error opening {file}: {e}");
             ExitCode::FAILURE
         }
     }

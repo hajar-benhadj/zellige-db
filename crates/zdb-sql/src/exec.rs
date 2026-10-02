@@ -313,6 +313,7 @@ fn select_stmt(
     if matches!(select.items.first(), Some(SelectItem::CountStar)) {
         return Ok(crate::Output::Query {
             columns: vec!["count".into()],
+            column_types: vec![DataType::Int],
             rows: vec![vec![Value::Int(matching.len() as i64)]],
         });
     }
@@ -333,6 +334,7 @@ fn select_stmt(
         .iter()
         .map(|&i| schema.columns[i].0.clone())
         .collect();
+    let column_types = indices.iter().map(|&i| schema.columns[i].1).collect();
 
     // Sort on full rows (ORDER BY may reference unprojected columns).
     let order_indices: Vec<(usize, bool)> = select
@@ -362,7 +364,11 @@ fn select_stmt(
     if let Some(limit) = select.limit {
         rows.truncate(limit as usize);
     }
-    Ok(crate::Output::Query { columns, rows })
+    Ok(crate::Output::Query {
+        columns,
+        column_types,
+        rows,
+    })
 }
 
 fn scan_visible(
@@ -659,6 +665,7 @@ fn show_tables(db: &mut Database) -> Result<crate::Output, SqlError> {
     names.sort();
     Ok(crate::Output::Query {
         columns: vec!["tables".into()],
+        column_types: vec![DataType::Text],
         rows: names.into_iter().map(|n| vec![Value::Text(n)]).collect(),
     })
 }

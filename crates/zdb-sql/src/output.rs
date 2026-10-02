@@ -7,7 +7,7 @@ use crate::types::Value;
 pub fn render(output: &Output) -> String {
     match output {
         Output::Command { tag } => format!("{tag}\n"),
-        Output::Query { columns, rows } => {
+        Output::Query { columns, rows, .. } => {
             let rendered: Vec<Vec<String>> = rows
                 .iter()
                 .map(|r| r.iter().map(Value::display).collect())

@@ -99,17 +99,27 @@ pub enum BinOp {
 }
 
 pub fn parse(input: &str) -> Result<Statement, SqlError> {
+    let mut stmts = parse_all(input)?;
+    if stmts.len() != 1 {
+        return Err(SqlError::Parse("expected exactly one statement".into()));
+    }
+    Ok(stmts.pop().unwrap())
+}
+
+/// Parse every statement in the input — the wire protocol sends batches
+/// like `stmt1; stmt2;` in a single query message.
+pub fn parse_all(input: &str) -> Result<Vec<Statement>, SqlError> {
     let tokens = lex(input)?;
     let mut p = Parser { tokens, pos: 0 };
-    let stmt = p.statement()?;
-    p.eat_optional_semicolon();
-    if p.pos != p.tokens.len() {
-        return Err(SqlError::Parse(format!(
-            "unexpected trailing input near token {}",
-            p.pos + 1
-        )));
+    let mut statements = Vec::new();
+    loop {
+        p.eat_optional_semicolon();
+        if p.pos == p.tokens.len() {
+            break;
+        }
+        statements.push(p.statement()?);
     }
-    Ok(stmt)
+    Ok(statements)
 }
 
 struct Parser {

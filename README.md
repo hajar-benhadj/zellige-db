@@ -33,7 +33,7 @@ no hand-waving:
 | 3 | WAL + crash recovery + crash-test harness | ✅ |
 | 4 | SQL: parser, executor, REPL + differential testing vs SQLite | ✅ |
 | 5 | Secondary indexes + MVCC snapshot isolation | ✅ |
-| 6 | Postgres wire protocol — `psql` compatibility | ⬜ |
+| 6 | Postgres wire protocol — `psql` compatibility | ✅ |
 | 7 | Benchmarks (YCSB-lite) + documented optimizations | ⬜ |
 | 8 | WASM playground — try it in the browser | ⬜ |
 | 9 | v0.1.0 release, blog series | ⬜ |

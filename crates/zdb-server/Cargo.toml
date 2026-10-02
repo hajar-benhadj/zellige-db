@@ -7,10 +7,14 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[lib]
+name = "zdb_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "zdb"
 path = "src/main.rs"
 
 [dependencies]
-zdb-sql = { workspace = true }
 zdb-core = { workspace = true }
+zdb-sql = { workspace = true }

@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use zdb_core::{Database, DbError};
 
 use crate::parser::Statement;
-use crate::types::{SqlError, Value};
+use crate::types::{DataType, SqlError, Value};
 
 /// Result of executing one statement.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +28,7 @@ pub enum Output {
     /// Rows for `SELECT` / `SHOW TABLES`.
     Query {
         columns: Vec<String>,
+        column_types: Vec<DataType>,
         rows: Vec<Vec<Value>>,
     },
     /// A psql-style command tag: `CREATE TABLE`, `INSERT 0 3`, `UPDATE 12`…
@@ -76,8 +77,33 @@ impl SqlEngine {
     /// statement is its own transaction (auto-commit on success, rollback
     /// on error) — exactly the guarantee the WAL makes cheap.
     pub fn execute(&mut self, sql: &str) -> Result<Output, SqlError> {
-        let stmt = parser::parse(sql)?;
+        let mut stmts = parser::parse_all(sql)?;
+        if stmts.len() != 1 {
+            return Err(SqlError::Parse("expected exactly one statement".into()));
+        }
+        self.execute_stmt(stmts.pop().unwrap())
+    }
 
+    /// Execute every statement in a batch, reporting each output as it
+    /// happens — the wire protocol's query loop.
+    pub fn execute_batch(
+        &mut self,
+        sql: &str,
+        mut on_output: impl FnMut(Output),
+    ) -> Result<(), SqlError> {
+        for stmt in parser::parse_all(sql)? {
+            let output = self.execute_stmt(stmt)?;
+            on_output(output);
+        }
+        Ok(())
+    }
+
+    /// Whether this session has an explicit transaction open.
+    pub fn in_txn(&self) -> bool {
+        self.txn.is_some()
+    }
+
+    fn execute_stmt(&mut self, stmt: Statement) -> Result<Output, SqlError> {
         match stmt {
             Statement::Begin => {
                 if self.txn.is_some() {
