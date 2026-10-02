@@ -1,25 +1,94 @@
 //! `zdb` — the ZelligeDB command line entry point.
 //!
-//! Subcommands grow with the phases:
-//! - `demo-tree [file] [n]` — build a B+Tree of n entries and dump it
-//! - the SQL REPL arrives in phase 4; `zdb serve` (pg wire) in phase 6
+//! - `zdb [file]`            — the SQL REPL (creates the file when missing)
+//! - `zdb demo-tree [f] [n]` — build a B+Tree of n entries and dump it
+//! - `zdb serve ...`         — Postgres wire protocol (phase 6)
 
+use std::io::{BufRead, Write};
 use std::process::ExitCode;
 
 use zdb_core::{BTree, Database, DbError};
+use zdb_sql::SqlEngine;
+use zdb_sql::output::render;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        None | Some("repl") => repl(args.get(1).map(String::as_str)),
         Some("demo-tree") => demo_tree(&args[1..]),
-        _ => {
-            eprintln!("ZelligeDB v{}", env!("CARGO_PKG_VERSION"));
-            eprintln!();
-            eprintln!("usage:");
-            eprintln!("  zdb demo-tree [file] [entries]   build a B+Tree and dump its structure");
-            ExitCode::from(2)
+        _ => usage(),
+    }
+}
+
+fn usage() -> ExitCode {
+    eprintln!("ZelligeDB v{}", env!("CARGO_PKG_VERSION"));
+    eprintln!();
+    eprintln!("usage:");
+    eprintln!("  zdb [file]                      SQL REPL (default file: zellige.zdb)");
+    eprintln!("  zdb demo-tree [file] [entries]  B+Tree structure dump");
+    ExitCode::from(2)
+}
+
+fn repl(path_arg: Option<&str>) -> ExitCode {
+    let path = path_arg.unwrap_or("zellige.zdb");
+    let engine = if std::path::Path::new(path).exists() {
+        SqlEngine::open(path)
+    } else {
+        SqlEngine::create(path)
+    };
+    let mut engine = match engine {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error opening {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!(
+        "ZelligeDB v{} — {} (SQL REPL)",
+        env!("CARGO_PKG_VERSION"),
+        path
+    );
+    println!(
+        "Type SQL ending with ';'. .quit to exit. Try: CREATE TABLE t (id INTEGER, name TEXT);"
+    );
+
+    let stdin = std::io::stdin();
+    let mut buffer = String::new();
+    loop {
+        if buffer.is_empty() {
+            print!("zdb> ");
+        } else {
+            print!("  .. ");
+        }
+        let _ = std::io::stdout().flush();
+
+        let mut line = String::new();
+        match stdin.lock().read_line(&mut line) {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        let trimmed = line.trim();
+        if buffer.is_empty() {
+            match trimmed {
+                ".quit" | ".exit" => break,
+                "" => continue,
+                _ => {}
+            }
+        }
+        buffer.push(' ');
+        buffer.push_str(trimmed);
+
+        if !trimmed.ends_with(';') {
+            continue; // keep reading a multi-line statement
+        }
+        let sql = std::mem::take(&mut buffer);
+        match engine.execute(&sql) {
+            Ok(output) => print!("{}", render(&output)),
+            Err(e) => println!("ERROR: {e}"),
         }
     }
+    ExitCode::SUCCESS
 }
 
 fn demo_tree(args: &[String]) -> ExitCode {

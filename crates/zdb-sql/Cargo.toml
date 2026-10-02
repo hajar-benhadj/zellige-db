@@ -7,4 +7,12 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Differential testing against SQLite needs a C library; enabled only in
+# CI on Linux. Locally: cargo test -p zdb-sql --features diff-sqlite
+diff-sqlite = ["dep:rusqlite"]
+
 [dependencies]
+thiserror = { workspace = true }
+zdb-core = { workspace = true }
+rusqlite = { workspace = true, optional = true }

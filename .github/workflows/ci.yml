@@ -28,3 +28,13 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace
+
+  differential:
+    name: differential tests vs SQLite (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Differential tests
+        run: cargo test -p zdb-sql --features diff-sqlite

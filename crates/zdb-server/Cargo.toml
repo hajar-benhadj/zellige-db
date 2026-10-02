@@ -12,4 +12,5 @@ name = "zdb"
 path = "src/main.rs"
 
 [dependencies]
+zdb-sql = { workspace = true }
 zdb-core = { workspace = true }

@@ -18,6 +18,9 @@ zdb-core = { path = "crates/zdb-core" }
 zdb-sql = { path = "crates/zdb-sql" }
 thiserror = "2"
 crc32fast = "1"
+# Only compiled for the differential-testing suite (Linux CI), which links
+# a bundled SQLite to cross-check the SQL engine's answers.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Keep debug symbols in release builds so flamegraphs from the
 # benchmark phase (phase 7) map back to real source lines.

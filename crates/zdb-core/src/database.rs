@@ -239,8 +239,10 @@ fn recover(pager: &mut Pager, frames: &[Frame]) -> Result<(), DbError> {
     }
     if last_commit > 0 {
         pager.sync()?;
-        pager.reload_meta()?;
     }
+    // Always re-derive in-memory meta from page 0: this both recovers the
+    // recovered bookkeeping and refuses to open a non-database file.
+    pager.reload_meta()?;
     Ok(())
 }
 
