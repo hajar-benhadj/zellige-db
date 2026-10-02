@@ -36,7 +36,7 @@ no hand-waving:
 | 6 | Postgres wire protocol — `psql` compatibility | ✅ |
 | 7 | Benchmarks (YCSB-lite) + documented optimizations | ⬜ |
 | 8 | WASM playground — try it in the browser | ✅ |
-| 9 | v0.1.0 release, blog series | ⬜ |
+| 9 | v0.1.0 release, blog series | ✅ |
 
 ## Try it in your browser
 
@@ -84,9 +84,11 @@ no `unsafe` · minimal dependencies · every decision gets an
 
 ## Documentation
 
+- [Build log: I built a database engine from scratch](docs/blog/01-hello-zelligedb.md)
+- [Benchmarks — numbers and how to reproduce them](docs/benchmarks.md)
 - [Architecture overview](docs/ARCHITECTURE.md)
-- [Architecture Decision Records](docs/adr/)
-- [Learning notes (per phase)](docs/learning-notes/)
+- [Architecture Decision Records](docs/adr/) — 9 of them
+- [Learning notes per phase](docs/learning-notes/) (بالدارجة)
 
 ## License
 
