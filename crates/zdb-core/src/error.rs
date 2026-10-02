@@ -38,6 +38,9 @@ pub enum DbError {
     #[error("not a ZelligeDB file: bad magic in meta page")]
     BadMagic,
 
+    #[error("nested transaction")]
+    NestedTransaction,
+
     #[error("entry too large for a single node (key {key_len} B, value {val_len} B, max {max} B)")]
     EntryTooLarge {
         key_len: usize,

@@ -1,18 +1,21 @@
 //! ZelligeDB SQL front-end.
 //!
-//! [`SqlEngine`] ties everything together: parse → plan → execute over a
-//! [`Database`](zdb_core::Database), with statement-scoped auto-transactions
-//! and explicit `BEGIN`/`COMMIT`/`ROLLBACK`.
+//! [`SqlEngine`] is a *session* over a shared [`Database`]: clone it for
+//! concurrent sessions (the server does), execute SQL through the MVCC
+//! layer. Explicit `BEGIN`/`COMMIT`/`ROLLBACK` hold the engine's single
+//! storage transaction; every other write statement is auto-committed.
 
 #![deny(unsafe_code)]
 
 pub mod exec;
 pub mod lexer;
+pub mod mvcc;
 pub mod output;
 pub mod parser;
 pub mod types;
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use zdb_core::{Database, DbError};
 
@@ -31,28 +34,37 @@ pub enum Output {
     Command { tag: String },
 }
 
+/// One session's explicit-transaction context (see ADR-0006).
+#[derive(Debug, Clone)]
+pub(crate) struct TxnContext {
+    pub id: u64,
+}
+
+/// A SQL session over the shared storage engine. Cheap to clone: each
+/// clone is an independent session with its own transaction state.
+#[derive(Clone)]
 pub struct SqlEngine {
-    db: Database,
-    in_txn: bool,
+    db: Arc<Mutex<Database>>,
     path: PathBuf,
+    txn: Option<TxnContext>,
 }
 
 impl SqlEngine {
     pub fn create(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let path = path.as_ref().to_path_buf();
         Ok(SqlEngine {
-            db: Database::create(&path)?,
-            in_txn: false,
+            db: Arc::new(Mutex::new(Database::create(&path)?)),
             path,
+            txn: None,
         })
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let path = path.as_ref().to_path_buf();
         Ok(SqlEngine {
-            db: Database::open(&path)?,
-            in_txn: false,
+            db: Arc::new(Mutex::new(Database::open(&path)?)),
             path,
+            txn: None,
         })
     }
 
@@ -64,56 +76,92 @@ impl SqlEngine {
     /// statement is its own transaction (auto-commit on success, rollback
     /// on error) — exactly the guarantee the WAL makes cheap.
     pub fn execute(&mut self, sql: &str) -> Result<Output, SqlError> {
-        match parser::parse(sql)? {
+        let stmt = parser::parse(sql)?;
+
+        match stmt {
             Statement::Begin => {
-                if self.in_txn {
+                if self.txn.is_some() {
                     return Err(SqlError::Parse("transaction already open".into()));
                 }
-                self.db.begin()?;
-                self.in_txn = true;
+                let id = match self.db.lock().unwrap().begin() {
+                    Ok(id) => id,
+                    // Another session holds the single storage transaction.
+                    Err(DbError::NestedTransaction) => {
+                        return Err(SqlError::Locked);
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+                self.txn = Some(TxnContext { id });
                 Ok(Output::Command {
                     tag: "BEGIN".into(),
                 })
             }
             Statement::Commit => {
-                if !self.in_txn {
-                    return Err(SqlError::Parse("no transaction is open".into()));
+                self.txn
+                    .take()
+                    .ok_or_else(|| SqlError::Parse("no transaction is open".into()))?;
+                match self.db.lock().unwrap().commit() {
+                    Ok(()) => Ok(Output::Command {
+                        tag: "COMMIT".into(),
+                    }),
+                    Err(e) => Err(e.into()),
                 }
-                self.db.commit()?;
-                self.in_txn = false;
-                Ok(Output::Command {
-                    tag: "COMMIT".into(),
-                })
             }
             Statement::Rollback => {
-                if !self.in_txn {
-                    return Err(SqlError::Parse("no transaction is open".into()));
+                self.txn
+                    .take()
+                    .ok_or_else(|| SqlError::Parse("no transaction is open".into()))?;
+                match self.db.lock().unwrap().rollback() {
+                    Ok(()) => Ok(Output::Command {
+                        tag: "ROLLBACK".into(),
+                    }),
+                    Err(e) => Err(e.into()),
                 }
-                self.db.rollback()?;
-                self.in_txn = false;
-                Ok(Output::Command {
-                    tag: "ROLLBACK".into(),
-                })
             }
             stmt => {
-                let auto_commit = !self.in_txn;
-                if auto_commit {
-                    self.db.begin()?;
+                let mut db = self.db.lock().unwrap();
+                let txn_id = self.txn.as_ref().map(|t| t.id);
+                let holding = self.txn.is_some();
+                let is_write = matches!(
+                    stmt,
+                    Statement::CreateTable { .. }
+                        | Statement::DropTable { .. }
+                        | Statement::CreateIndex { .. }
+                        | Statement::DropIndex { .. }
+                        | Statement::Insert { .. }
+                        | Statement::Update { .. }
+                        | Statement::Delete { .. }
+                );
+
+                if !is_write || holding {
+                    // Reads need no storage transaction; writes inside an
+                    // explicit transaction run under the one already open.
+                    return exec::run(&mut db, txn_id, stmt);
                 }
-                let result = self.run(stmt);
-                if auto_commit {
-                    match &result {
-                        Ok(_) => self.db.commit()?,
-                        Err(_) => self.db.rollback()?,
+                // Auto-commit write: one statement, one storage transaction.
+                let auto_id = match db.begin() {
+                    Ok(id) => id,
+                    Err(DbError::NestedTransaction) => {
+                        return Err(SqlError::Locked);
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+                match exec::run(&mut db, Some(auto_id), stmt) {
+                    Ok(output) => {
+                        db.commit()?;
+                        Ok(output)
+                    }
+                    Err(e) => {
+                        db.rollback()?;
+                        Err(e)
                     }
                 }
-                result
             }
         }
     }
 
-    /// Direct access to the underlying database (tools, tests).
-    pub fn db(&mut self) -> &mut Database {
-        &mut self.db
+    /// Direct access to the underlying database (tools; single-threaded).
+    pub fn db(&self) -> &Mutex<Database> {
+        &self.db
     }
 }

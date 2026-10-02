@@ -29,7 +29,7 @@ pub mod wal;
 pub(crate) mod testing;
 
 pub use btree::{BTree, BTreeScan};
-pub use database::Database;
+pub use database::{Database, TxnStatus};
 pub use error::DbError;
 pub use io::PageIo;
 pub use page::{NIL_PAGE, PAGE_SIZE, PAYLOAD_LEN, Page, PageId, PageType};

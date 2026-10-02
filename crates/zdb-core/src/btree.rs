@@ -353,25 +353,58 @@ impl BTree {
 
     /// Full ascending scan, driven by the leaf chain.
     pub fn scan<'a>(&self, pager: &'a mut dyn PageIo) -> Result<BTreeScan<'a>, DbError> {
-        let mut leaf_id = NIL_PAGE;
-        if let Some(root) = self.root {
-            let mut page_id = root;
-            loop {
-                let page = pager.read_page(page_id)?;
-                if page.page_type()? == PageType::BTreeInterior {
-                    page_id = Interior::decode(page.payload())?.first_child;
-                } else {
-                    leaf_id = page_id;
-                    break;
+        self.range(pager, None, None)
+    }
+
+    /// Bounded ascending scan: yields keys with `start <= k < end`
+    /// (either bound optional). Descends directly to the leaf that holds
+    /// `start` — the index-scan path the SQL planner uses.
+    pub fn range<'a>(
+        &self,
+        pager: &'a mut dyn PageIo,
+        start: Option<&[u8]>,
+        end: Option<&[u8]>,
+    ) -> Result<BTreeScan<'a>, DbError> {
+        let Some(root) = self.root else {
+            return Ok(BTreeScan {
+                pager,
+                leaf_id: NIL_PAGE,
+                idx: 0,
+                done: true,
+                end: None,
+            });
+        };
+
+        // Descend to the leaf that would hold `start` (or the leftmost leaf).
+        let mut page_id = root;
+        let leaf = loop {
+            let page = pager.read_page(page_id)?;
+            match page.page_type()? {
+                PageType::BTreeInterior => {
+                    let node = Interior::decode(page.payload())?;
+                    let i = child_index(&node.entries, start.unwrap_or(b""));
+                    page_id = if i == 0 {
+                        node.first_child
+                    } else {
+                        node.entries[i - 1].1
+                    };
                 }
+                PageType::BTreeLeaf => break Leaf::decode(page.payload())?,
+                _ => return Err(DbError::Corrupt("unexpected page type in range scan")),
             }
+        };
+
+        let mut idx = 0;
+        if let Some(start) = start {
+            idx = leaf.entries.partition_point(|(k, _)| k.as_slice() < start);
         }
-        let done = leaf_id == NIL_PAGE;
+        let done = idx >= leaf.entries.len() && leaf.next == NIL_PAGE;
         Ok(BTreeScan {
             pager,
-            leaf_id,
-            idx: 0,
+            leaf_id: page_id,
+            idx,
             done,
+            end: end.map(|e| e.to_vec()),
         })
     }
 
@@ -771,12 +804,13 @@ fn merge(
 // ---------------------------------------------------------------------------
 
 /// Ascending iterator over every `(key, value)` in the tree, following the
-/// leaf chain page by page.
+/// leaf chain page by page. An optional exclusive end bound stops it early.
 pub struct BTreeScan<'a> {
     pager: &'a mut dyn PageIo,
     leaf_id: PageId,
     idx: usize,
     done: bool,
+    end: Option<Vec<u8>>,
 }
 
 impl<'a> Iterator for BTreeScan<'a> {
@@ -792,6 +826,12 @@ impl<'a> Iterator for BTreeScan<'a> {
             let leaf = read_leaf(self.pager, self.leaf_id).ok()?;
             if self.idx < leaf.entries.len() {
                 let entry = leaf.entries[self.idx].clone();
+                if let Some(end) = &self.end
+                    && entry.0.as_slice() >= end.as_slice()
+                {
+                    self.done = true;
+                    return None;
+                }
                 self.idx += 1;
                 return Some(entry);
             }

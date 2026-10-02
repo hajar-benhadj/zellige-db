@@ -16,6 +16,7 @@
 //!    the data file, then discards the log. A torn tail — the crash
 //!    artifact — is detected by frame CRC and thrown away whole.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::btree::BTree;
@@ -29,6 +30,16 @@ use crate::wal::{COMMIT_PAGE_ID, Frame, WalWriter};
 /// bound: correctness never depends on when a checkpoint runs.
 const CHECKPOINT_THRESHOLD: usize = 256;
 
+/// MVCC transaction statuses (ADR-0006). Unknown ids — from before a
+/// restart, say — are treated as `Committed`: a crash discards every
+/// uncommitted journal record, so anything that survived is committed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxnStatus {
+    Active,
+    Committed,
+    Aborted,
+}
+
 /// A transactional database file: `foo.zdb` + its journal `foo.zdb.wal`.
 pub struct Database {
     pager: Pager,
@@ -41,6 +52,10 @@ pub struct Database {
     txn_pending_start: usize,
     txn_meta_snapshot: Option<MetaSnapshot>,
     path: PathBuf,
+    /// MVCC transaction registry (ADR-0006). Sessions and statuses are
+    /// session-lifetime state; ids themselves persist in the meta page.
+    txns: HashMap<u64, TxnStatus>,
+    current_txn_id: u64,
 }
 
 fn wal_path(db_path: &Path) -> PathBuf {
@@ -64,6 +79,8 @@ impl Database {
             txn_pending_start: 0,
             txn_meta_snapshot: None,
             path,
+            txns: HashMap::new(),
+            current_txn_id: 0,
         })
     }
 
@@ -94,6 +111,8 @@ impl Database {
             txn_pending_start: 0,
             txn_meta_snapshot: None,
             path,
+            txns: HashMap::new(),
+            current_txn_id: 0,
         })
     }
 
@@ -151,17 +170,24 @@ impl Database {
         }
     }
 
-    /// Begin a transaction. Nested transactions are not supported — the
-    /// engine is single-writer per file in this release.
-    pub fn begin(&mut self) -> Result<(), DbError> {
+    /// Begin a transaction and allocate its MVCC id (journaled via the meta
+    /// page so the counter survives crashes). Nested transactions are not
+    /// supported — the engine is single-writer per file in this release.
+    pub fn begin(&mut self) -> Result<u64, DbError> {
         if self.in_txn {
-            return Err(DbError::Corrupt("nested transaction"));
+            return Err(DbError::NestedTransaction);
         }
+        let txn_id = self.pager.next_txn_id();
+        self.pager.set_next_txn_id(txn_id + 1);
+        let mut meta = self.pager.meta_image();
+        self.write_page(&mut meta)?;
+        self.register_txn(txn_id, TxnStatus::Active);
+        self.current_txn_id = txn_id;
         self.in_txn = true;
         self.txn_wal_start = self.wal.bytes_written();
         self.txn_pending_start = self.pending.len();
         self.txn_meta_snapshot = Some(self.pager.meta_snapshot());
-        Ok(())
+        Ok(txn_id)
     }
 
     /// Commit: journal a commit record and fsync. When this returns, the
@@ -172,6 +198,7 @@ impl Database {
         }
         self.wal.append_commit()?;
         self.wal.flush_and_sync()?;
+        self.txns.insert(self.current_txn_id, TxnStatus::Committed);
         self.in_txn = false;
         self.txn_meta_snapshot = None;
         if self.pending.len() >= CHECKPOINT_THRESHOLD {
@@ -191,8 +218,27 @@ impl Database {
         if let Some(snapshot) = self.txn_meta_snapshot.take() {
             self.pager.restore_meta(snapshot);
         }
+        self.txns.insert(self.current_txn_id, TxnStatus::Aborted);
         self.in_txn = false;
         Ok(())
+    }
+
+    /// MVCC visibility input: the status of a transaction id. Unknown ids
+    /// are committed by definition — see [`TxnStatus`].
+    pub fn txn_status(&self, txn_id: u64) -> TxnStatus {
+        self.txns
+            .get(&txn_id)
+            .copied()
+            .unwrap_or(TxnStatus::Committed)
+    }
+
+    fn register_txn(&mut self, txn_id: u64, status: TxnStatus) {
+        // Statuses of committed transactions can always be forgotten: the
+        // visibility rule treats unknown ids as committed anyway.
+        if self.txns.len() > 50_000 {
+            self.txns.retain(|_, s| *s == TxnStatus::Active);
+        }
+        self.txns.insert(txn_id, status);
     }
 
     /// Copy every journaled page into the data file, fsync it, empty the

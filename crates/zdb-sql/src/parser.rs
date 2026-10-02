@@ -20,6 +20,14 @@ pub enum Statement {
     DropTable {
         name: String,
     },
+    CreateIndex {
+        name: String,
+        table: String,
+        column: String,
+    },
+    DropIndex {
+        name: String,
+    },
     Insert {
         table: String,
         rows: Vec<Vec<Expr>>,
@@ -172,6 +180,19 @@ impl Parser {
             return self.select();
         }
         if self.eat_keyword("CREATE") {
+            if self.eat_keyword("INDEX") {
+                let name = self.ident()?;
+                self.expect_keyword("ON")?;
+                let table = self.ident()?;
+                self.expect_symbol(Symbol::LParen)?;
+                let column = self.ident()?;
+                self.expect_symbol(Symbol::RParen)?;
+                return Ok(Statement::CreateIndex {
+                    name,
+                    table,
+                    column,
+                });
+            }
             self.expect_keyword("TABLE")?;
             let name = self.ident()?;
             self.expect_symbol(Symbol::LParen)?;
@@ -196,6 +217,11 @@ impl Parser {
             return Ok(Statement::CreateTable { name, columns });
         }
         if self.eat_keyword("DROP") {
+            if self.eat_keyword("INDEX") {
+                return Ok(Statement::DropIndex {
+                    name: self.ident()?,
+                });
+            }
             self.expect_keyword("TABLE")?;
             return Ok(Statement::DropTable {
                 name: self.ident()?,

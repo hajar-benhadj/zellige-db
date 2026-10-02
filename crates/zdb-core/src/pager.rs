@@ -30,13 +30,15 @@ const META_PAGE_ID: PageId = 0;
 /// 12              4     free list head (NIL_PAGE if empty)
 /// 16              4     free page count
 /// 20              4     catalog B+Tree root (NIL_PAGE if no trees yet)
-/// ```
+/// 24              8     next transaction id (MVCC)
+///```
 #[derive(Debug, Clone, Copy)]
 struct MetaPage {
     page_count: u32,
     free_head: PageId,
     free_count: u32,
     catalog_root: PageId,
+    next_txn_id: u64,
 }
 
 impl MetaPage {
@@ -49,6 +51,7 @@ impl MetaPage {
         p[12..16].copy_from_slice(&self.free_head.to_le_bytes());
         p[16..20].copy_from_slice(&self.free_count.to_le_bytes());
         p[20..24].copy_from_slice(&self.catalog_root.to_le_bytes());
+        p[24..32].copy_from_slice(&self.next_txn_id.to_le_bytes());
     }
 
     fn decode(page: &Page) -> Result<Self, DbError> {
@@ -73,6 +76,7 @@ impl MetaPage {
             free_head: u32_at(12),
             free_count: u32_at(16),
             catalog_root: u32_at(20),
+            next_txn_id: u64::from_le_bytes(p[24..32].try_into().unwrap()),
         })
     }
 }
@@ -106,6 +110,7 @@ impl Pager {
                 free_head: NIL_PAGE,
                 free_count: 0,
                 catalog_root: NIL_PAGE,
+                next_txn_id: 1,
             },
         };
         pager.persist_meta()?;
@@ -140,6 +145,7 @@ impl Pager {
                 free_head: NIL_PAGE,
                 free_count: 0,
                 catalog_root: NIL_PAGE,
+                next_txn_id: 1,
             },
         };
         if let Ok(meta_page) = pager.read_page(META_PAGE_ID)
@@ -251,6 +257,7 @@ impl Pager {
             free_head: self.meta.free_head,
             free_count: self.meta.free_count,
             catalog_root: self.meta.catalog_root,
+            next_txn_id: self.meta.next_txn_id,
         }
     }
 
@@ -260,6 +267,7 @@ impl Pager {
             free_head: snapshot.free_head,
             free_count: snapshot.free_count,
             catalog_root: snapshot.catalog_root,
+            next_txn_id: snapshot.next_txn_id,
         };
     }
 
@@ -271,6 +279,16 @@ impl Pager {
 
     pub fn catalog_root(&self) -> PageId {
         self.meta.catalog_root
+    }
+
+    /// MVCC transaction-id counter (see ADR-0006). In-memory only; the
+    /// caller journals the meta image to make the allocation durable.
+    pub fn next_txn_id(&self) -> u64 {
+        self.meta.next_txn_id
+    }
+
+    pub fn set_next_txn_id(&mut self, next: u64) {
+        self.meta.next_txn_id = next;
     }
 
     /// Sealed meta page image reflecting the current in-memory state.
@@ -358,6 +376,7 @@ pub struct MetaSnapshot {
     pub free_head: PageId,
     pub free_count: u32,
     pub catalog_root: PageId,
+    pub next_txn_id: u64,
 }
 
 #[cfg(test)]

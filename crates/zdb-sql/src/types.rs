@@ -67,11 +67,19 @@ impl DataType {
     }
 }
 
-/// A table schema: ordered columns plus the row-id counter.
+/// A secondary index definition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexDef {
+    pub name: String,
+    pub column: String,
+}
+
+/// A table schema: ordered columns, the row-id counter, and its indexes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Schema {
     pub columns: Vec<(String, DataType)>,
     pub next_row_id: u64,
+    pub indexes: Vec<IndexDef>,
 }
 
 impl Schema {
@@ -87,6 +95,13 @@ impl Schema {
             out.push(ty.to_u8());
             out.push(name.len() as u8);
             out.extend_from_slice(name.as_bytes());
+        }
+        out.push(self.indexes.len() as u8);
+        for index in &self.indexes {
+            out.push(index.name.len() as u8);
+            out.extend_from_slice(index.name.as_bytes());
+            out.push(index.column.len() as u8);
+            out.extend_from_slice(index.column.as_bytes());
         }
         out
     }
@@ -117,9 +132,35 @@ impl Schema {
             columns.push((name, ty));
             cols_rest = &r[nlen as usize..];
         }
+        // Index section (optional for files written before phase 5).
+        let mut indexes = Vec::new();
+        if let Some((&nidx, mut idx_rest)) = cols_rest.split_first() {
+            for _ in 0..nidx {
+                let (&nlen, r) = idx_rest
+                    .split_first()
+                    .ok_or(DbError::Corrupt("schema: index name len"))?;
+                if r.len() < nlen as usize {
+                    return Err(DbError::Corrupt("schema: index name"));
+                }
+                let name = String::from_utf8(r[..nlen as usize].to_vec())
+                    .map_err(|_| DbError::Corrupt("schema: index name utf8"))?;
+                let rest = &r[nlen as usize..];
+                let (&clen, r2) = rest
+                    .split_first()
+                    .ok_or(DbError::Corrupt("schema: index column len"))?;
+                if r2.len() < clen as usize {
+                    return Err(DbError::Corrupt("schema: index column"));
+                }
+                let column = String::from_utf8(r2[..clen as usize].to_vec())
+                    .map_err(|_| DbError::Corrupt("schema: index column utf8"))?;
+                indexes.push(IndexDef { name, column });
+                idx_rest = &r2[clen as usize..];
+            }
+        }
         Ok(Schema {
             columns,
             next_row_id,
+            indexes,
         })
     }
 }
@@ -239,4 +280,7 @@ pub enum SqlError {
 
     #[error("storage error: {0}")]
     Db(#[from] DbError),
+
+    #[error("database is locked by another transaction")]
+    Locked,
 }
