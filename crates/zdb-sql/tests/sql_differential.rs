@@ -105,7 +105,7 @@ fn random_select(rng: &mut Lcg) -> String {
         let dir = if rng.below(2) == 0 { "ASC" } else { "DESC" };
         format!(" ORDER BY {col} {dir}, id ASC")
     } else {
-        ""
+        String::new()
     };
     let limit = if rng.below(2) == 0 {
         format!(" LIMIT {}", 5 + rng.below(45))
