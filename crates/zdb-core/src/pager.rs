@@ -10,8 +10,6 @@
 //! commit-time fsync semantics.
 
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::error::DbError;
@@ -427,6 +425,8 @@ pub struct MetaSnapshot {
 mod tests {
     use super::*;
     use crate::testing::TempDir;
+    use std::fs::OpenOptions;
+    use std::io::{Seek, SeekFrom, Write};
 
     #[test]
     fn create_then_reopen_roundtrip() -> Result<(), DbError> {
