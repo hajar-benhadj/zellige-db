@@ -11,6 +11,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::DbError;
@@ -87,7 +88,14 @@ pub struct Pager {
     file: File,
     path: PathBuf,
     meta: MetaPage,
+    /// Per-process page cache (ADR-0008): turns a seek+read syscall pair
+    /// into a hash lookup for hot pages. Writes update the cache as they
+    /// reach the file, so it never disagrees with what was written.
+    cache: HashMap<PageId, Page>,
 }
+
+/// Cache ceiling in pages (32 MiB of 4 KiB pages).
+const CACHE_MAX_PAGES: usize = 8192;
 
 impl Pager {
     /// Create a fresh database file. Fails if the path already exists —
@@ -112,6 +120,7 @@ impl Pager {
                 catalog_root: NIL_PAGE,
                 next_txn_id: 1,
             },
+            cache: HashMap::new(),
         };
         pager.persist_meta()?;
         pager.sync()?;
@@ -147,6 +156,7 @@ impl Pager {
                 catalog_root: NIL_PAGE,
                 next_txn_id: 1,
             },
+            cache: HashMap::new(),
         };
         if let Ok(meta_page) = pager.read_page(META_PAGE_ID)
             && let Ok(meta) = MetaPage::decode(&meta_page)
@@ -161,14 +171,26 @@ impl Pager {
     }
 
     /// Read a page and verify its checksum against what was written.
+    /// Hot pages come from the cache; misses populate it.
     pub fn read_page(&mut self, page_id: PageId) -> Result<Page, DbError> {
         if page_id >= self.meta.page_count {
             return Err(DbError::PageOutOfBounds(page_id));
         }
+        if let Some(page) = self.cache.get(&page_id) {
+            return Ok(page.clone());
+        }
         let mut bytes = [0u8; PAGE_SIZE];
         self.file.seek(SeekFrom::Start(Self::offset(page_id)))?;
         self.file.read_exact(&mut bytes)?;
-        Page::decode(bytes)
+        let page = Page::decode(bytes)?;
+        if self.cache.len() >= CACHE_MAX_PAGES {
+            // Arbitrary eviction is fine: the cache is a pure accelerator.
+            if let Some(&victim) = self.cache.keys().next() {
+                self.cache.remove(&victim);
+            }
+        }
+        self.cache.insert(page_id, page.clone());
+        Ok(page)
     }
 
     /// Seal (checksum) a page and write it to disk.
@@ -183,6 +205,7 @@ impl Pager {
         page.seal();
         self.file.seek(SeekFrom::Start(Self::offset(page_id)))?;
         self.file.write_all(page.bytes())?;
+        self.cache.insert(page_id, page.clone());
         Ok(())
     }
 
@@ -344,6 +367,10 @@ impl Pager {
         self.file
             .seek(SeekFrom::Start(Self::offset(page.page_id())))?;
         self.file.write_all(page.bytes())?;
+        // Raw writes happen during recovery, before anything trusts the
+        // cache — skipping this update is exactly how a stale cache turns
+        // a repaired file back into a broken one.
+        self.cache.insert(page.page_id(), page.clone());
         Ok(())
     }
 

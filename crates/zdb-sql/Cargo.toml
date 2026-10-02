@@ -16,3 +16,7 @@ diff-sqlite = ["dep:rusqlite"]
 thiserror = { workspace = true }
 zdb-core = { workspace = true }
 rusqlite = { workspace = true, optional = true }
+
+[[bench]]
+name = "sql"
+harness = false

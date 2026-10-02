@@ -38,6 +38,17 @@ no hand-waving:
 | 8 | WASM playground — try it in the browser | ⬜ |
 | 9 | v0.1.0 release, blog series | ⬜ |
 
+## Numbers (measured, not promised)
+
+| benchmark | result |
+|---|---|
+| point query, index scan vs full scan | **132x faster** |
+| batched txn vs per-statement auto-commit | **7.8x faster** (same fsync guarantee) |
+| page cache (ADR-0008) | **25-35% off** read-heavy paths |
+
+Reproduce with `cargo bench`; full tables and the war story behind them in
+[docs/benchmarks.md](docs/benchmarks.md).
+
 ## Quick start
 
 ```bash
