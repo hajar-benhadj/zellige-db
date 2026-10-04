@@ -1,9 +1,6 @@
 <div align="center">
 
-# 🧩 ZelligeDB
-
-**A relational database engine built from scratch in Rust.**
-*Pages, B+Tree, write-ahead log, MVCC, SQL — and a wire protocol real `psql` clients speak.*
+<img src=".github/assets/banner.png" alt="ZelligeDB — a relational database engine built from scratch in Rust" width="100%">
 
 [![CI](https://github.com/hajar-benhadj/zellige-db/actions/workflows/ci.yml/badge.svg)](https://github.com/hajar-benhadj/zellige-db/actions/workflows/ci.yml)
 [![Playground](https://github.com/hajar-benhadj/zellige-db/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/hajar-benhadj/zellige-db/actions/workflows/deploy-pages.yml)
@@ -12,26 +9,43 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-red)](https://github.com/hajar-benhadj/zellige-db/blob/main/crates/zdb-core/src/lib.rs)
 
-**[▶ Try it in your browser](https://hajar-benhadj.github.io/zellige-db/)** — the full engine compiled to WebAssembly. No server, no install.
+[**▶ Try it in your browser**](https://hajar-benhadj.github.io/zellige-db/) · [Release v0.1.0](https://github.com/hajar-benhadj/zellige-db/releases) · [Build log](docs/blog/01-hello-zelligedb.md) · [ADRs](docs/adr/)
+
+*No database libraries. No parser libraries. No `unsafe`. 65 tests, 3 operating systems, one engine — from pages on disk to a wire protocol real `psql` clients speak.*
 
 </div>
 
 ---
 
-*Zellige* is the Moroccan art of assembling small, precise tiles into intricate
-patterns. ZelligeDB applies the same idea to storage: **4 KiB tiles (pages)**
-assembled into trees, journals, and tables — every tile checksummed, every
-layer tested.
+## 🧩 Why "Zellige"?
+
+**Zellige** (زليج) is the Moroccan craft of hand-cutting terracotta tiles and
+assembling them — piece by piece, for over a thousand years — into the
+geometric mosaics that cover mosques, fountains, and palaces. No glue holding
+a picture together: every tile must sit *exactly* right, or the whole pattern
+tells on it.
+
+That is precisely how this engine is built, and why it carries the name:
+
+| zellige craft | ZelligeDB engineering |
+|---|---|
+| every tile is cut by hand | every 4 KiB page is laid out byte by byte — no storage library does it for you |
+| a cracked tile is spotted at once and replaced | every page carries a CRC32 checksum; corruption is caught at read time, never silently propagated |
+| the pattern only holds if each tile sits exactly right | the B+Tree, WAL, and MVCC layers all carry structural integrity checkers |
+| the mosaic is assembled piece by piece, over months | the engine grew phase by phase — pager → tree → journal → SQL — each landing with tests and a written decision record |
+
+And like zellige, the result is not a wall decoration: it is meant to be
+walked on, used, and admired up close.
 
 ## Why this exists
 
-Plenty of tutorials build a toy key-value store and stop. ZelligeDB builds the
-parts that make a database **trustworthy**, and proves them:
+Plenty of tutorials build a toy key-value store and stop. ZelligeDB builds
+the parts that make a database **trustworthy**, and proves them:
 
 | | |
 |---|---|
 | 🔁 **Crash-proof by design** | Every mutation is journaled before it touches the data file. The crash suite tears the journal at 200 adversarial offsets and simulates `kill -9` — committed data survives *every* crash point, uncommitted data never leaks. |
-| 🧪 **Correctness as a feature** | ~40,000 randomized B+Tree operations verified against `BTreeMap`; **600 randomized SQL queries run against SQLite and must match exactly**; a full structural integrity checker. |
+| 🧪 **Correctness as a feature** | ~40,000 randomized B+Tree operations verified against `BTreeMap`; **600 randomized SQL queries run against SQLite and must match exactly**; a full structural integrity checker per layer. |
 | ⚡ **Measured, not promised** | Index scans **132× faster** than full scans. Batched transactions **7.8× faster** than auto-commit. Every number reproducible via `cargo bench`. |
 | 🗣️ **Speaks Postgres** | A stock `psql` connects to it — real wire protocol v3, real SQLSTATE error codes, psql-style command tags. |
 | 🌐 **Runs in a browser tab** | The same engine compiles to WebAssembly over an in-memory backend. The playground executes SQL client-side. |
@@ -221,6 +235,9 @@ Huge debts to: **SQLite** (the differential referee and the gold standard
 for embedded engineering), *Database Internals* by Alex Petrov, CMU
 15-445, and the papers behind Raft, MVCC, and LSM storage that made this a
 journey through the literature rather than guesswork.
+
+And to the maalems — the master artisans of Fez and Marrakech — whose
+mosaics inspired the name and, honestly, the engineering discipline too.
 
 ## License
 
